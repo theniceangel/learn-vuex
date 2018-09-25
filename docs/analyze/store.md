@@ -108,7 +108,7 @@ store.state.a.count // -> moduleA 的 count -> 1
 store.state.b.count // -> moduleB 的 count -> 2
 ```
 
-从而得知 `moduleColletion` 的作用是通过使用调用方传入的 `options` 组建一定的数据结构，类的定义是位于 `src/module/module-collection.js`。
+从而得知 `moduleColletion` 的作用是通过使用调用方传入的 `options` 组建**树状结构**，类的定义是位于 `src/module/module-collection.js`。
 
 ```js
 export default class ModuleCollection {

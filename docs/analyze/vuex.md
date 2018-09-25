@@ -208,11 +208,11 @@ function vuexInit () {
 }
 ```
 
-首先得到 merge 过后的 `$options`，我们 `new Vue({store})` 时候，会进入 `if` 分支，也就是当前根 Vue 实例的 `$store` 是存储了 store 实例。那么什么情况会走到 `else if` 分支呢。实际上，在组件的初始化过程当中，是一个树的**深度遍历**过程（如下图所示）。
+首先得到 merge 过后的 `$options`，我们 `new Vue({store})` 时候，会进入 `if` 分支，也就是当前根 Vue 实例的 `$store` 是存储了 store 实例。那么什么情况会走到 `else if` 分支呢。实际上，在子组件的初始化过程当中，是走到 `else if` 分支。Vue 项目的初始化其实是一个树的**深度遍历**过程（如下图所示）。
 
 <img :src="$withBase('/vue_componts_init.png')">
 
-这样能保证 `options.parent.$store` 取到的是 `options.store`。vue_componts_init
+由于树的**深度遍历**，所以子组件都能通过一定方式获取到父组件，这样能保证 `options.parent.$store` 取到的是 `options.store`。
 
 ## 总结
 
