@@ -1,2 +1,2 @@
-# learn-vuex
-learn vuex deeply
+# learning-vuex
+👍vuex源码分析

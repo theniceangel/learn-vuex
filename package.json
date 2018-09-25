@@ -1,0 +1,29 @@
+{
+  "name": "learn-vuex",
+  "version": "1.0.0",
+  "description": "learn vuex",
+  "main": "''",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theniceangel/learn-vuex.git"
+  },
+  "keywords": [
+    "javascript",
+    "vuex"
+  ],
+  "author": "JiZhi",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/theniceangel/learn-vuex/issues"
+  },
+  "homepage": "https://github.com/theniceangel/learn-vuex#readme",
+  "devDependencies": {
+    "vuepress": "^0.14.4"
+  }
+}
