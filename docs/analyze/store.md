@@ -236,7 +236,7 @@ watch (getter, cb, options) {
 
 ### 第一步 总结
 
-我们来对第一步做个总结吧。先在 Store 实例上声明了很多属性，再就是通过 `new ModuleCollection` 来解析调用方传入的 `options` 来深度递归构建 Module 树。这些都是准备工作。我们接下来看第二步做了些什么？
+我们来对第一步做个总结吧。先在 Store 实例上声明了很多属性，再就是通过 `new ModuleCollection` 来解析调用方传入的 `options` 深度递归构建 Module 树。这些都是准备工作。我们接下来看第二步做了些什么？
 
 ## 第二步
     
