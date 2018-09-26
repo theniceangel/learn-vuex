@@ -363,7 +363,9 @@ moduleD -> 'moduleB/moduleD/'
 因为我们可以看出：如果当前 module 是没有配置 namespaced，
 他的 namespace 就是与父 module 的 namespace 相同。
 namespace 是用于构建每个 module 的 actions，getters，mutations 映射表。
-所以如果 namespace 相同，你在 moduleC 触发一个 action，moduleA 下面的同名 action 也会被触发
+如果两个模块的 namespace 相同，
+他们的 actions，getters，mutations 的属性对应的回调函数都注册在同一个 key 名之下。
+你在 moduleC 触发一个 action，moduleA 下面的同名 action 也会被触发
 ```
 
 我们知道 `namespace` 的作用之后，继续看接下来的代码
