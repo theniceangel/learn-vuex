@@ -240,47 +240,7 @@ watch (getter, cb, options) {
 
 ## 第二步
 
-先将原型上的 `dispatch` 与 `commit` 方法代理到实例的 `dispatch` 与 `commit` 上，并且原型上的方法是绑定了当前 store 实例为上下文的。`dispatch` 与 `commit` 方法分别是用来调用 `action` 和 `mutation`。那么问题就来了，为什么要把 `dispatch` 与 `commit` 都单独在 Store 实例上去实现呢，如果调用方直接通过 `store.dispatch` 也可以拿到原型上的 `dispatch`方法来派发 `action`的呀？这是比较经典的问题。我们先来看原型上的 `dispatch` 方法的定义。
-
-```js
-dispatch (_type, _payload) {
-  // check object-style dispatch
-  const {
-    type,
-    payload
-  } = unifyObjectStyle(_type, _payload)
-
-  const action = { type, payload }
-  const entry = this._actions[type]
-  if (!entry) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error(`[vuex] unknown action type: ${type}`)
-    }
-    return
-  }
-
-  this._actionSubscribers.forEach(sub => sub(action, this.state))
-
-  return entry.length > 1
-    ? Promise.all(entry.map(handler => handler(payload)))
-    : entry[0](payload)
-}
-```
-
-原型上 `dispatch` 方法里面的 `this` 的执行环境的上下文来决定的，而 store 是支持在 `action` 的回调函数的第一个参数拿到 `dispatch`的。
-
-```js
-actions: {
-  // ...
-  actionB ({ dispatch, commit }) {
-    return dispatch('actionA').then(() => {
-      commit('someOtherMutation')
-    })
-  }
-}
-```
-
-如果这个时候执行 `dispatch`，上下文的环境就再也不是 store 实例了。这就是为什么原型上的方法是绑定了 store 实例作为运行环境的。
+先将原型上的 `dispatch` 与 `commit` 方法代理到实例的 `dispatch` 与 `commit` 上，并且原型上的方法是绑定了当前 store 实例为上下文的。`dispatch` 与 `commit` 方法分别是用来调用 `action` 和 `mutation`。就个人感觉而言，其实不是一定要绑定了当前 store 实例为上下文的。因为只要保证调用 `dispatch` 方法的时候是 Store 实例作为上下文就可以。
 
 我们通过`new ModuleCollection` 构建了 module 树状结构，并且赋值给了 `this._modules`。所以接下来就是安装每个 module。
 
@@ -544,136 +504,210 @@ function makeLocalContext (store, namespace, path) {
 }
 ```
 
-我们来看下 `makeLocalContext` 内部的实现。这个函数的作用是为了构建模块的 dispatch, commit, getters and state。函数返回的是一个 `local` 对象，并且存储在 `module.context` 上。我们来分析它的每个 key 的实现：
+我们来看下 `makeLocalContext` 内部的实现。这个函数的作用是为了构建模块的 dispatch, commit, getters and state。函数返回的是一个 `local` 对象，并且存储在 `module.context` 上。我们来分析它的每个 key 的实现：  
 
-  1. **dispatch**
+
+  1. **dispatch**  
   
-  如果 `namespace` 不为空，说明该模块是有命名空间的。那么返回如下一个函数
+      如果 `namespace` 不为空，说明该模块是有命名空间的。那么返回如下一个函数：  
+      
+      ```js
+      (_type, _payload, _options) => {
+        const args = unifyObjectStyle(_type, _payload, _options)
+        const { payload, options } = args
+        let { type } = args
 
-  ```js
-  (_type, _payload, _options) => {
-    const args = unifyObjectStyle(_type, _payload, _options)
-    const { payload, options } = args
-    let { type } = args
+        if (!options || !options.root) {
+          type = namespace + type
+          if (process.env.NODE_ENV !== 'production' && !store._actions[type]) {
+            console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
+            return
+          }
+        }
 
-    if (!options || !options.root) {
-      type = namespace + type
-      if (process.env.NODE_ENV !== 'production' && !store._actions[type]) {
-        console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
-        return
+        return store.dispatch(type, payload)
       }
-    }
+      ```
 
-    return store.dispatch(type, payload)
-  }
-  ```
-
-  这个函数内部先根据 `namespace` 与 传入的 `type` 做一次拼接。这样就精确定位到了这个模块对应的 `action` 的回调函数。可以看到：如果 `{ options: true }`，直接忽略模块的 `namespace`，调用根 store 的 `action`。也就是通过 `local.dispatch` 派发的 `action` 就是该模块对应的 `action` 的回调函数，函数的底层还是通过根 store 的 `dispatch` 方法来触发的，因为 `type` 已经是补齐 `namespace`。
+      这个函数内部先根据 `namespace` 与 传入的 `type` 做一次拼接。这样就精确定位到了这个模块对应的 `action` 的回调函数。可以看到：如果 `{ options: true }`，直接忽略模块的 `namespace`，调用根 store 的 `action`。也就是通过 `local.dispatch` 派发的 `action` 就是该模块对应的 `action` 的回调函数，函数的底层还是通过根 store 的 `dispatch` 方法来触发的，因为 `type` 已经是补齐 `namespace`。
 
   2. **commit**  
 
-  与 `dispatch` 大同小异。
+      与 `dispatch` 大同小异。
 
   3. **getters**  
 
-  我们先看下 `makeLocalGetters` 的实现：
+      我们先看下 `makeLocalGetters` 的实现：
 
-  ```js
-  function makeLocalGetters (store, namespace) {
-    const gettersProxy = {}
+      ```js
+      function makeLocalGetters (store, namespace) {
+        const gettersProxy = {}
 
-    const splitPos = namespace.length
-    Object.keys(store.getters).forEach(type => {
-      // skip if the target getter is not match this namespace
-      if (type.slice(0, splitPos) !== namespace) return
+        const splitPos = namespace.length
+        Object.keys(store.getters).forEach(type => {
+          // skip if the target getter is not match this namespace
+          if (type.slice(0, splitPos) !== namespace) return
 
-      // extract local getter type
-      const localType = type.slice(splitPos)
+          // extract local getter type
+          const localType = type.slice(splitPos)
 
-      // Add a port to the getters proxy.
-      // Define as getter property because
-      // we do not want to evaluate the getters in this time.
-      Object.defineProperty(gettersProxy, localType, {
-        get: () => store.getters[type],
-        enumerable: true
-      })
-    })
+          // Add a port to the getters proxy.
+          // Define as getter property because
+          // we do not want to evaluate the getters in this time.
+          Object.defineProperty(gettersProxy, localType, {
+            get: () => store.getters[type],
+            enumerable: true
+          })
+        })
 
-    return gettersProxy
-  }
-  ```
+        return gettersProxy
+      }
+      ```
   
-  通过 `namespace` 可以定位到 `store.getters` 下对应的值。这个是利用 Vue computed 的机制实现的，相当于 store 的计算属性。我们会在接下来的 `resetStoreVM` 涉及。函数返回的是当前模块对应 getters 的对象。
+      通过 `namespace` 可以定位到 `store.getters` 下对应的值。这个是利用 Vue computed 的机制实现的，相当于 store 的计算属性。我们会在接下来的 `resetStoreVM` 涉及。函数返回的是当前模块对应 getters 的对象。
 
   4. **state** 
 
-  `getNestedState` 函数传入 `state` 与 `path` 算出当前模块的 state。
+      `getNestedState` 函数传入 `state` 与 `path` 算出当前模块的 state。
 
-得到 `local` 之后，开始安装每个模块的 `mutations`, `actions`, `state`, `getters`，并且把 `local` 传入，这样就能在这些函数中，拿到自己模块的信息。我们先从 `mutations` 的安装下手。
+通过上面四个步骤得到 `local` 之后，开始安装每个模块的 `mutations`, `actions`, `state`, `getters`，并且把 `local` 传入，这样就能在这些函数中，拿到自己模块的信息。我们先从 `mutations` 的安装下手。
 
   1.  **registerMutation**
 
-  ```js
-  function registerMutation (store, type, handler, local) {
-    const entry = store._mutations[type] || (store._mutations[type] = [])
-    entry.push(function wrappedMutationHandler (payload) {
-      handler.call(store, local.state, payload)
-    })
-  }
-  ```
-
-  `mutation` 都是经过 `wrappedMutationHandler` 函数包装之后推入 `store._mutations` 对应的数组里面。这样使得多个模块能够对同一 mutation 作出响应（只要模块的 `namespace` 与 `mutation` 对应的 key 名都相同）。执行 `wrappedMutationHandler`，也就是执行了对应的 `mutation`，并且把当前模块的 `state` 传入。知道了如何注册 Mutation，那我们也就知道如何调用对应模块的 Mutation。看下面一个例子：
-
-  ```js
-  const options = {
-    mutations: {
-      count () {}
-    },
-    modules: {
-      namespaced: true,
-      moduleA: {
-        mutations: { count() {} }
+      ```js
+      function registerMutation (store, type, handler, local) {
+        const entry = store._mutations[type] || (store._mutations[type] = [])
+        entry.push(function wrappedMutationHandler (payload) {
+          handler.call(store, local.state, payload)
+        })
       }
-    }
-  }
+      ```
 
-  // 注册 mutation 之后
-  store._mutations = {
-    'count' : [function wrappedMutationHandler() { /* 根 module 的 mutation */  }]
-    'moduleA/count': [function wrappedMutationHandler() { /* moduleA 的 mutation */  }]
-  }
-  ```
+      `mutation` 都是经过 `wrappedMutationHandler` 函数包装之后推入 `store._mutations` 对应的数组里面。这样使得多个模块能够对同一 mutation 作出响应（只要模块的 `namespace` 与 `mutation` 对应的 key 名都相同）。执行 `wrappedMutationHandler`，也就是执行了对应的 `mutation`，并且把当前模块的 `state` 传入。知道了如何注册 Mutation，那我们也就知道如何调用对应模块的 Mutation。看下面一个例子：
+
+      ```js
+      const options = {
+        mutations: {
+          count () {}
+        },
+        modules: {
+          namespaced: true,
+          moduleA: {
+            mutations: { count() {} }
+          }
+        }
+      }
+
+      // 注册 mutation 之后
+      store._mutations = {
+        'count' : [function wrappedMutationHandler() { /* 根 module 的 mutation */  }]
+        'moduleA/count': [function wrappedMutationHandler() { /* moduleA 的 mutation */  }]
+      }
+      ```
 
   2.  **registerAction**
 
-  ```js
-  function registerAction (store, type, handler, local) {
-    const entry = store._actions[type] || (store._actions[type] = [])
-    entry.push(function wrappedActionHandler (payload, cb) {
-      let res = handler.call(store, {
-        dispatch: local.dispatch,
-        commit: local.commit,
-        getters: local.getters,
-        state: local.state,
-        rootGetters: store.getters,
-        rootState: store.state
-      }, payload, cb)
-      if (!isPromise(res)) {
-        res = Promise.resolve(res)
-      }
-      if (store._devtoolHook) {
-        return res.catch(err => {
-          store._devtoolHook.emit('vuex:error', err)
-          throw err
+      ```js
+      function registerAction (store, type, handler, local) {
+        const entry = store._actions[type] || (store._actions[type] = [])
+        entry.push(function wrappedActionHandler (payload, cb) {
+          let res = handler.call(store, {
+            dispatch: local.dispatch,
+            commit: local.commit,
+            getters: local.getters,
+            state: local.state,
+            rootGetters: store.getters,
+            rootState: store.state
+          }, payload, cb)
+          if (!isPromise(res)) {
+            res = Promise.resolve(res)
+          }
+          if (store._devtoolHook) {
+            return res.catch(err => {
+              store._devtoolHook.emit('vuex:error', err)
+              throw err
+            })
+          } else {
+            return res
+          }
         })
-      } else {
-        return res
       }
-    })
-  }
-  ```
+      ```
 
-  `action` 的存储方式与 `mutation` 相同，但是内部的逻辑略有不同。`wrappedActionHandler` 函数内部执行调用方定义的 `action` 函数的时候，是传入了六个参数，`dispatch`，`commit`，`getters`，`state`，这些都是当前模块的。
+      `action` 的存储方式与 `mutation` 相同，但是内部的逻辑略有不同。`wrappedActionHandler` 函数内部执行调用方定义的 `action` 函数的时候，传入了六个参数，前四个分别为：`dispatch`，`commit`，`getters`，`state`，这些都是当前模块的。调用这些方法或者获取这些属性都会自动帮你拼接 `namespace`，而这些逻辑都是在 `makeLocalContext` 里做的。后两个参数： `rootGetters` 与 `rootState` 都是根模块的。最后，我们可以看到，每一个 `action` 都返回了 Promise，所以我们可以像下面一样使用 `action`：
+
+      ```js
+      actions: {
+        actionA ({ commit }) {
+          return new Promise((resolve, reject) => {
+            setTimeout(() => {
+              commit('someMutation')
+              resolve()
+            }, 1000)
+          })
+        }
+      }
+
+      store.dispatch('actionA').then(() => {
+        // ...
+      })
+      ```
+
+  3.  **registerGetter**
+
+      过程与 **registerMutation** 相似，这里就不做赘述了。
+
+最后只要深度递归每个子模块，完成所有模块的安装即可。
+
+### 第二步 总结
+
+我们来总结下第二步做了什么？目的很明确，就是安装模块，将其对应的 `state`， `getters`， `actions`， `mutations` 的回调函数用一层包装函数去包裹，并且在包装函数的内部执行回调函数的时候传入当前模块以及根模块的属性或者方法。我们拿 `Vuex` 源码里的 `examples/shopping-cart` 下的 Store 配置做一个例子。
+
+```js
+const cart = {
+  state: {
+    items: [],
+    checkoutStatus: null
+  },
+  getters: {
+    cartProducts () {}
+  },
+  actions: {
+    checkout () {}
+  },
+  mutations: {
+    pushProductToCart () {}
+  }
+}
+new Vuex.Store({
+  modules: {
+    cart
+  }
+})
+
+// 经过 installModule 之后
+store = {
+  state: {
+    cart: {
+      items: [],
+      checkoutStatus: null
+    }
+  },
+  _wrappedGetters: {
+    'cart/cartProducts': function wrappedGetter() {}
+  },
+  _actions: {
+    'cart/checkout': function wrappedActionHandler() {}
+  },
+  _mutations: {
+    'cart/pushProductToCart': function wrappedMutationHandler() {}
+  }
+}
+```
+
+## 第三步
+
+为什么 Store 的 State 是响应式的呢，为什么我们能直接通过 `Store.getters.xxx` 获取到我们之前配置的 `getters` 函数的返回值呢，这些谜题的答案都能在 `resetStoreVM` 里面找到。
 
 
 
