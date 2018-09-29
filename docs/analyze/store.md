@@ -709,6 +709,129 @@ store = {
 
 为什么 Store 的 State 是响应式的呢，为什么我们能直接通过 `Store.getters.xxx` 获取到我们之前配置的 `getters` 函数的返回值呢，这些谜题的答案都能在 `resetStoreVM` 里面找到。
 
+```js
+function resetStoreVM (store, state, hot) {
+  const oldVm = store._vm
+
+  // bind store public getters
+  store.getters = {}
+  const wrappedGetters = store._wrappedGetters
+  const computed = {}
+  forEachValue(wrappedGetters, (fn, key) => {
+    // use computed to leverage its lazy-caching mechanism
+    computed[key] = () => fn(store)
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key],
+      enumerable: true // for local getters
+    })
+  })
+
+  // use a Vue instance to store the state tree
+  // suppress warnings just in case the user has added
+  // some funky global mixins
+  const silent = Vue.config.silent
+  Vue.config.silent = true
+  store._vm = new Vue({
+    data: {
+      $$state: state
+    },
+    computed
+  })
+  Vue.config.silent = silent
+
+  // enable strict mode for new vm
+  if (store.strict) {
+    enableStrictMode(store)
+  }
+
+  if (oldVm) {
+    if (hot) {
+      // dispatch changes in all subscribed watchers
+      // to force getter re-evaluation for hot reloading.
+      store._withCommit(() => {
+        oldVm._data.$$state = null
+      })
+    }
+    Vue.nextTick(() => oldVm.$destroy())
+  }
+}
+```
+
+首先先通过 `oldVm` 缓存之前的 vue 实例，拿到 `store._wrappedGetters` 的 `key/value`，利用 `computed` 对象将 `key` 与 `() => value(store)` 进行键值对绑定，用来作为 `store._vm` 的计算属性，同时通过 `Object.defineProperty` 奖所有的 `key` 挂载在 `store.getters` 上，并且对 `store.getters` 求值的过程是代理到对 `store.vm` 求值的过程。如此按照整个链路来看，执行 `store.getters.XXX` 就是对 `store._vm.XXX` 求值，这是个 `computed` 属性。就会将当前 `watch` 实例加入到 `XXX` 属性的依赖当中，因为 `XXX` 属性又是通过 `() => fn(store)` 而来的，也就是依赖了 store 里面的 `state` 与 `getters` 的变化，只要store 里面的 `state` 与 `getters` 发生了变化，就能使得 `XXX` 属性重新求值。从这整个链路来讲，`Store` 的 `State` 的响应式实现是非常精妙的。
+
+我们再来看下 `enableStrictMode`，内部的代码是这样的：
+
+```js
+function enableStrictMode (store) {
+  store._vm.$watch(function () { return this._data.$$state }, () => {
+    if (process.env.NODE_ENV !== 'production') {
+      assert(store._committing, `do not mutate vuex store state outside mutation handlers.`)
+    }
+  }, { deep: true, sync: true })
+}
+```
+
+`store._vm` 通过 `$watch` 去深度并且同步观测 `this._data.$$state` 的变化，只要这个响应式的数据发生变化，就会执行 `assert` 断言，如果发现 `store._committing` 的值为 `false`，就抛出错误。所以我们每次修改 `State`，必须是在 `store._withcommit` 这个函数的回调里面。 我们看下这个函数的定义：
+
+```js
+_withCommit (fn) {
+  const committing = this._committing
+  this._committing = true
+  fn()
+  this._committing = committing
+}
+```
+
+这个函数其实就是个包装函数，用来包装 `fn`，在其之前，强制将 `this._committing` 设置为 `true`，这样你只要在 `fn` 里面修改 `state` 的时候，触发 `enableStrictMode` 里面的 `watch` 回调的时候，就不会抛出警告了。记住 `{ sync: true }` 这个配置是必须的，要不然 `watch` 回调都是在下一个 tick 里面执行的，这样就会导致先执行 `this._committing = committing` 后 `assert` 了。
+
+### 第三步 总结
+
+通过第三步，`getters` 与 `state` 变成了响应式，我们用一个列子来概括下 `getters` 与 `state` 怎么做到响应式的。
+
+```js
+const options = {
+  state: {
+    musicList: ['innocence']
+  },
+  getters: {
+    firstMusic ({ musicList }) {
+      return musicList[0]
+    }
+  }
+}
+
+const store = new Vuex.Store(options)
+
+// 先分析 state 是如何做到响应式的
+首先如果我在组件里面执行 `this.$store.state.musicList`，其实是执行了 `store._vm._data.$$state.musicList`，因为 `store._vm._data.$$state` 是一个响应式数据，所以会将当前 watch 添加进它的依赖，只要这个数据发生了赋值变化，就能通知到所有对 `state` 进行求值的 watch。
+
+// 再分析下 getters 是怎么作为 store 的计算属性的
+传入了 getters，store 实例化的过程中会安装模块，也就是执行下面的伪代码
+
+store._wrappedGetters = function wrappedGetter (store) {
+  return firstMusic(
+    local.state, // local state
+    local.getters, // local getters
+    store.state, // root state
+    store.getters // root getters
+  )
+}
+
+store._vm = new Vue({
+  data: {
+    $$state: {
+      musicList: ['innocence']
+    }
+  },
+  computed: {
+    firstMusic () {
+      return wrappedGetter(store)
+    }
+  }
+})
+
+而我们执行 `store.getters.firstMusic`，相当于执行 `store._vm.firstMusic`，因为 `firstMusic` 函数内部是对 `store.state` 进行求值的，而且是个计算属性，所以当 `musicList` 发生变化，`firstMusic` 也重新求值了。
+```
 
 
 
