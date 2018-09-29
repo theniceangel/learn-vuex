@@ -833,6 +833,333 @@ store._vm = new Vue({
 而我们执行 `store.getters.firstMusic`，相当于执行 `store._vm.firstMusic`，因为 `firstMusic` 函数内部是对 `store.state` 进行求值的，而且是个计算属性，所以当 `musicList` 发生变化，`firstMusic` 也重新求值了。
 ```
 
+## 第四步
 
+store 是拥有一种让插件订阅自己变化的能力。我们看如下代码：
 
-    
+```js
+// apply plugins
+plugins.forEach(plugin => plugin(this))
+```
+
+store 在实例化的时候是接收 `plugins` 的配置项，默认是一个空数组，数组的每一项是插件导出的函数，会在构造函数里执行这个函数，并且将自身实例传入。Vuex 是自带了 `logger` 插件，它允许我们能够在 `state` 的变化前后生成 `snapshots`。插件的代码是位于 `src/plugins/logger.js`
+
+```js
+export default function createLogger ({
+  collapsed = true,
+  filter = (mutation, stateBefore, stateAfter) => true,
+  transformer = state => state,
+  mutationTransformer = mut => mut,
+  logger = console
+} = {}) {
+  return store => {
+    let prevState = deepCopy(store.state)
+
+    store.subscribe((mutation, state) => {
+      if (typeof logger === 'undefined') {
+        return
+      }
+      const nextState = deepCopy(state)
+
+      if (filter(mutation, prevState, nextState)) {
+        const time = new Date()
+        const formattedTime = ` @ ${pad(time.getHours(), 2)}:${pad(time.getMinutes(), 2)}:${pad(time.getSeconds(), 2)}.${pad(time.getMilliseconds(), 3)}`
+        const formattedMutation = mutationTransformer(mutation)
+        const message = `mutation ${mutation.type}${formattedTime}`
+        const startMessage = collapsed
+          ? logger.groupCollapsed
+          : logger.group
+
+        // render
+        try {
+          startMessage.call(logger, message)
+        } catch (e) {
+          console.log(message)
+        }
+
+        logger.log('%c prev state', 'color: #9E9E9E; font-weight: bold', transformer(prevState))
+        logger.log('%c mutation', 'color: #03A9F4; font-weight: bold', formattedMutation)
+        logger.log('%c next state', 'color: #4CAF50; font-weight: bold', transformer(nextState))
+
+        try {
+          logger.groupEnd()
+        } catch (e) {
+          logger.log('—— log end ——')
+        }
+      }
+
+      prevState = nextState
+    })
+  }
+}
+```
+
+`logger` 插件是导出的函数是默认返回一个新匿名函数，这个函数接收 `store` 作为参数。先保存之前  `state` 的变化值，然后订阅 `mutation` 的变化，我们先看下 `Store` 类上面的 `subscribe` 的定义。
+
+```js
+subscribe (fn) {
+  return genericSubscribe(fn, this._subscribers)
+}
+
+// genericSubscribe
+function genericSubscribe (fn, subs) {
+  if (subs.indexOf(fn) < 0) {
+    subs.push(fn)
+  }
+  return () => {
+    const i = subs.indexOf(fn)
+    if (i > -1) {
+      subs.splice(i, 1)
+    }
+  }
+}
+```
+
+接收一个订阅者 `fn`，并且将其推入到 `this._subscribers` 队列当中，同时利用闭包的原理返回一个取消剔除订阅者的回调。而 `this._subscribers` 队列里的订阅者什么时候执行呢，我们来看 `Store` 类上面的 `commit` 的定义。
+
+```js
+commit (_type, _payload, _options) {
+    //...
+
+    this._subscribers.forEach(sub => sub(mutation, this.state))
+
+    // ...
+  }
+```
+也就是只要执行了 `commit`，订阅者都会被执行一遍。这也就是我们 `logger` 插件的原理所在。它订阅了 `state` 的变化，只要你执行 `commit`，通过注入 `logger` 插件时的订阅者 `fn` 都会被通知到。我们来看下 `fn` 的定义。
+
+```js
+(mutation, state) => {
+  if (typeof logger === 'undefined') {
+    return
+  }
+  const nextState = deepCopy(state)
+
+  if (filter(mutation, prevState, nextState)) {
+    const time = new Date()
+    const formattedTime = ` @ ${pad(time.getHours(), 2)}:${pad(time.getMinutes(), 2)}:${pad(time.getSeconds(), 2)}.${pad(time.getMilliseconds(), 3)}`
+    const formattedMutation = mutationTransformer(mutation)
+    const message = `mutation ${mutation.type}${formattedTime}`
+    const startMessage = collapsed
+      ? logger.groupCollapsed
+      : logger.group
+
+    // render
+    try {
+      startMessage.call(logger, message)
+    } catch (e) {
+      console.log(message)
+    }
+
+    logger.log('%c prev state', 'color: #9E9E9E; font-weight: bold', transformer(prevState))
+    logger.log('%c mutation', 'color: #03A9F4; font-weight: bold', formattedMutation)
+    logger.log('%c next state', 'color: #4CAF50; font-weight: bold', transformer(nextState))
+
+    try {
+      logger.groupEnd()
+    } catch (e) {
+      logger.log('—— log end ——')
+    }
+  }
+
+  prevState = nextState
+})
+```
+
+首先拿到变化后的 `state`，并且格式化加上美化通过 `console` 输出，最后将当前 `state` 赋值给 `prevState`，为下一次 `commit` 执行 `fn` 做准备。
+
+### 第四步 总结
+
+`Store` 是可以允许订阅者订阅其变化的，这些订阅者是通过 `plugins` 的形式加入的，并且利用闭包，能够随时清理这些订阅者。这种设计师非常的精致与灵活。 
+
+## 原型上的方法
+
+我们来讲一下 `Store` 类上的方法，这些方法是允许调用方修改 `store` 实例。
+
+1. **commit**
+   
+   ```js
+    // check object-style commit
+    const {
+      type,
+      payload,
+      options
+    } = unifyObjectStyle(_type, _payload, _options)
+
+    const mutation = { type, payload }
+    const entry = this._mutations[type]
+    if (!entry) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error(`[vuex] unknown mutation type: ${type}`)
+      }
+      return
+    }
+    this._withCommit(() => {
+      entry.forEach(function commitIterator (handler) {
+        handler(payload)
+      })
+    })
+    this._subscribers.forEach(sub => sub(mutation, this.state))
+
+    if (
+      process.env.NODE_ENV !== 'production' &&
+      options && options.silent
+    ) {
+      console.warn(
+        `[vuex] mutation type: ${type}. Silent option has been removed. ` +
+        'Use the filter functionality in the vue-devtools'
+      )
+    }
+   ```
+   修改 `state` 的唯一方式，而且必须是同步代码。因为要生成 `state` 修改前后的快照。不管是根模块还是子模块提交 `mutation`，都是底层都是调用了这个函数，只不过子模块的调用是通过 `makeLocalContext` 拼接了 `namespace`，函数最后会执行所有订阅者 `fn`。
+
+2. **dispatch**   
+
+   ```js
+    dispatch (_type, _payload) {
+      // check object-style dispatch
+      const {
+        type,
+        payload
+      } = unifyObjectStyle(_type, _payload)
+
+      const action = { type, payload }
+      const entry = this._actions[type]
+      if (!entry) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(`[vuex] unknown action type: ${type}`)
+        }
+        return
+      }
+
+      this._actionSubscribers.forEach(sub => sub(action, this.state))
+
+      return entry.length > 1
+        ? Promise.all(entry.map(handler => handler(payload)))
+        : entry[0](payload)
+    }
+   ```
+
+   与 `commit` 相似，唯一不同的是 `action` 内部是可以支持异步的，而且 `action` 是一定返回一个 `Promise`。`dispatch` 在不同模块中可以触发多个 `action` 函数。在这种情况下，只有当所有触发函数完成后，返回的 Promise 才会执行。这个就是通过 `Promise.all` 这个 API 做到的。
+
+3. **subscribe 与 subscribeAction**   
+  
+    ```js
+    subscribe (fn) {
+      return genericSubscribe(fn, this._subscribers)
+    }
+    subscribeAction (fn) {
+      return genericSubscribe(fn, this._actionSubscribers)
+    }
+    function genericSubscribe (fn, subs) {
+      if (subs.indexOf(fn) < 0) {
+        subs.push(fn)
+      }
+      return () => {
+        const i = subs.indexOf(fn)
+        if (i > -1) {
+          subs.splice(i, 1)
+        }
+      }
+    }
+    ```
+
+    `fn` 订阅 `action` 与 `mutation`。只要执行了 `dipatch` 或者 `commit`，都会执行 `fn`，注册订阅者的时候同时返回一个可以注销 `fn` 的新匿名函数。
+
+3. **watch**
+
+    ```js
+    watch (getter, cb, options) {
+      if (process.env.NODE_ENV !== 'production') {
+        assert(typeof getter === 'function', `store.watch only accepts a function.`)
+      }
+      return this._watcherVM.$watch(() => getter(this.state, this.getters), cb, options)
+    }
+    ```
+
+    `store.watch` 是一个对外暴露可以侦听 `state` 与 `getters` 变化的 API，只要侦听的数据发生变化，就会执行调用方传入的 `getter` 回调函数。
+
+4. **replaceState**
+
+    ```js
+    replaceState (state) {
+      this._withCommit(() => {
+        this._vm._data.$$state = state
+      })
+    }
+    ```
+
+    `replaceState` 替换 store 的根状态，仅用状态合并或时光旅行调试。
+
+5. **registerModule**
+
+    ```js
+    registerModule (path, rawModule, options = {}) {
+      if (typeof path === 'string') path = [path]
+
+      if (process.env.NODE_ENV !== 'production') {
+        assert(Array.isArray(path), `module path must be a string or an Array.`)
+        assert(path.length > 0, 'cannot register the root module by using registerModule.')
+      }
+
+      this._modules.register(path, rawModule)
+      installModule(this, this.state, path, this._modules.get(path), options.preserveState)
+      // reset store to update getters...
+      resetStoreVM(this, this.state)
+    }
+    ```
+
+    动态注册模块，无法注册根模块，否则会影响之前通过 `new` 创建的 store 实例。
+
+6. **unregisterModule**
+
+    ```js
+    unregisterModule (path) {
+      if (typeof path === 'string') path = [path]
+
+      if (process.env.NODE_ENV !== 'production') {
+        assert(Array.isArray(path), `module path must be a string or an Array.`)
+      }
+
+      this._modules.unregister(path)
+      this._withCommit(() => {
+        const parentState = getNestedState(this.state, path.slice(0, -1))
+        Vue.delete(parentState, path[path.length - 1])
+      })
+      resetStore(this)
+    }
+    ```
+
+    动态卸载模块，不能使用此方法卸载静态模块（即创建 store 时声明的模块）。那这个是怎么做到的呢。看下面代码：
+    ```js
+    this._modules.unregister(path)
+
+    // module-collection
+    unregister (path) {
+      const parent = this.get(path.slice(0, -1))
+      const key = path[path.length - 1]
+      // 这一行是用来控制无法卸载静态模块
+      if (!parent.getChild(key).runtime) return
+
+      parent.removeChild(key)
+    }
+    ```
+
+    因为我们注册的静态模块的 `runtime` 默认是 `false`，而通过 `registerModule` 注册的模块的 `runtime` 默认是 `true`。
+
+5. **_withCommit**
+
+    ```js
+      _withCommit (fn) {
+      const committing = this._committing
+      this._committing = true
+      fn()
+      this._committing = committing
+    }
+    ```
+
+    用来包裹内部能够修改 `state`的 `fn` 的函数。`Vuex` 约定只能显性 `commit` 一个 `mutation` 来改变 `state`，所以对 `state` 发生修改的函数都是用 `_widthCommit` 进行包装了一层。
+
+## 大总结
+
+以上是对 `Store` 类的细节的剖析。我们知道了它是对我们传入的配置项做了哪些处理，怎样实现 `state` 响应式与 `getters` 计算属性的，以及怎样去分模块的，并且能够在模块的内部拿到模块的属性。但是我们发现，如果每次都是通过 `this.$store.state.xxx`，`this.$store.dispatch` 等去获取或者修改 `state` 是很麻烦的。幸好 `Vuex` 是给我们提供了一些 `mapXXX` 的辅助函数来帮我们的代码能够写的更清爽，这也是我们设计 `js` 库该学习的。怎样让用的人感觉很爽？
