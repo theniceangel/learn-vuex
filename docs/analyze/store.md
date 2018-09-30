@@ -1131,6 +1131,7 @@ commit (_type, _payload, _options) {
     ```
 
     动态卸载模块，不能使用此方法卸载静态模块（即创建 store 时声明的模块）。那这个是怎么做到的呢。看下面代码：
+    
     ```js
     this._modules.unregister(path)
 

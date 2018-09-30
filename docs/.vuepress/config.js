@@ -20,7 +20,8 @@ module.exports = {
         collapsable: false,
         children: [
           '/analyze/vuex',
-          '/analyze/store'
+          '/analyze/store',
+          '/analyze/vuex-helper'
         ]
       }
     ]
